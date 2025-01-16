@@ -1,3 +1,8 @@
+# Example usage:
+# ```sh
+# socat TCP4-LISTEN:1234 - | python3 read_bytes.py
+# ```
+
 import os
 import struct
 
