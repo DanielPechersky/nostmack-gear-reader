@@ -1,10 +1,16 @@
-use core::{convert::Infallible, net::SocketAddrV4, str::FromStr as _};
+use core::{
+    convert::Infallible,
+    net::{Ipv4Addr, SocketAddrV4},
+    str::FromStr as _,
+};
 
 use embassy_executor::Spawner;
-use embassy_net::{tcp::TcpSocket, Runner, Stack, StackResources, StaticConfigV4};
+use embassy_net::{
+    udp::{PacketMetadata, UdpSocket},
+    Runner, Stack, StackResources, StaticConfigV4,
+};
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, zerocopy_channel::Receiver};
 use embassy_time::{with_timeout, Duration, Timer};
-use embedded_io_async::Write as _;
 use esp_hal::{
     peripherals::{RADIO_CLK, TIMG0, WIFI},
     rng::Rng,
@@ -140,32 +146,34 @@ async fn send_deltas(mut rx: Receiver<'static, NoopRawMutex, i16>, stack: Stack<
         rx_buffer: &mut [u8],
         tx_buffer: &mut [u8],
     ) -> Result<Infallible, ()> {
-        let mut socket = TcpSocket::new(stack, rx_buffer, tx_buffer);
-        socket
-            .connect(SocketAddrV4::from_str(env!("REMOTE_ADDR")).unwrap())
-            .await
-            .map_err(|e| {
-                println!("Error connecting to hub: {e:?}");
-            })?;
+        let mut rx_metadata = [PacketMetadata::EMPTY; 5];
+        let mut tx_metadata = [PacketMetadata::EMPTY; 5];
 
-        socket.write_all(&id().to_be_bytes()).await.map_err(|e| {
-            println!("Error sending id to hub: {e:?}");
-        })?;
-        socket.flush().await.map_err(|e| {
-            println!("Error sending id to hub: {e:?}");
-        })?;
+        let mut socket = UdpSocket::new(
+            stack,
+            &mut rx_metadata,
+            rx_buffer,
+            &mut tx_metadata,
+            tx_buffer,
+        );
+        socket
+            .bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
+            .unwrap();
+        let remote_addr = SocketAddrV4::from_str(env!("REMOTE_ADDR")).unwrap();
         rx.receive_done(); // drop the first value in case we have a bunch of turns saved up
         loop {
             let count = rx.receive().await;
             println!("Sending count to hub: {count}");
-            socket.write_all(&count.to_be_bytes()).await.map_err(|e| {
+
+            let mut msg = [0; 6];
+            msg[..4].copy_from_slice(&id().to_be_bytes());
+            msg[4..].copy_from_slice(&count.to_be_bytes());
+            socket.send_to(&msg, remote_addr).await.map_err(|e| {
                 println!("Error sending count to hub: {e:?}");
             })?;
-            socket.flush().await.map_err(|e| {
-                println!("Error sending count to hub: {e:?}");
-            })?;
+            socket.flush().await;
             println!("Sent count to hub");
-            Timer::after(Duration::from_millis(100)).await;
+            Timer::after(Duration::from_millis(10)).await;
             rx.receive_done();
         }
     }

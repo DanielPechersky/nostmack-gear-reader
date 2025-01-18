@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 embassy-executor = { version = "0.6.0", features = ["task-arena-size-20480"] }
 embassy-net = { version = "0.5.0", features = [
-    "tcp",
+    "udp",
     "proto-ipv4",
     "dhcpv4",
     "medium-ip",
