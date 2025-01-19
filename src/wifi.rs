@@ -54,9 +54,10 @@ pub async fn connect(
 
 #[allow(dead_code)]
 async fn debug_networks<const N: usize>(wifi_controller: &mut WifiController<'static>) {
-    let (networks, n) = wifi_controller.scan_n_async::<N>().await.unwrap();
-    println!("Found {n} networks");
-    println!("Networks: {networks:?}");
+    if let Ok((networks, n)) = wifi_controller.scan_n_async::<N>().await {
+        println!("Found {n} networks");
+        println!("Networks: {networks:?}");
+    }
 }
 
 async fn connect_to_wifi(wifi_controller: &mut WifiController<'static>) -> Result<(), ()> {
@@ -68,7 +69,9 @@ async fn connect_to_wifi(wifi_controller: &mut WifiController<'static>) -> Resul
 
     wifi_controller
         .set_configuration(&esp_wifi::wifi::Configuration::Client(client_config))
-        .unwrap();
+        .map_err(|e| {
+            println!("Failed to set wifi configuration: {e:?}");
+        })?;
 
     with_timeout(Duration::from_secs(5), wifi_controller.connect_async())
         .await
@@ -153,7 +156,9 @@ async fn send_deltas(mut rx: Receiver<'static, NoopRawMutex, i16>, stack: Stack<
                     .address(),
                 1234,
             ))
-            .unwrap();
+            .map_err(|e| {
+                println!("Failed to bind socket: {e:?}");
+            })?;
         let remote_addr = SocketAddrV4::from_str(env!("REMOTE_ADDR")).unwrap();
         rx.receive_done(); // drop the first value in case we have a bunch of turns saved up
         loop {
@@ -161,7 +166,7 @@ async fn send_deltas(mut rx: Receiver<'static, NoopRawMutex, i16>, stack: Stack<
             println!("Sending count to hub: {count}");
 
             let mut msg = [0; 6];
-            msg[..4].copy_from_slice(&id().to_be_bytes());
+            msg[..4].copy_from_slice(&ID.to_be_bytes());
             msg[4..].copy_from_slice(&count.to_be_bytes());
             socket.send_to(&msg, remote_addr).await.map_err(|e| {
                 println!("Error sending count to hub: {e:?}");
@@ -183,6 +188,7 @@ async fn send_deltas(mut rx: Receiver<'static, NoopRawMutex, i16>, stack: Stack<
     }
 }
 
-fn id() -> u32 {
-    env!("ID").parse().unwrap()
-}
+const ID: u32 = match u32::from_str_radix(env!("ID"), 10) {
+    Ok(id) => id,
+    Err(_) => panic!("Failed to parse ID"),
+};
