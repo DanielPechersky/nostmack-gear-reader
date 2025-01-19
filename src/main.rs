@@ -10,9 +10,9 @@ use embassy_sync::{blocking_mutex::raw::NoopRawMutex, zerocopy_channel::Channel}
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::{
+    clock::CpuClock,
     gpio::{Input, Pull},
     pcnt::Pcnt,
-    prelude::*,
     rng::Rng,
     timer::timg::TimerGroup,
 };
