@@ -56,8 +56,8 @@ async fn main(spawner: Spawner) {
     wifi::connect(rx, &spawner, device, controller, rng).await;
 
     let pcnt = Pcnt::new(peripherals.PCNT);
-    let edge = Input::new(peripherals.GPIO34, Pull::Up);
-    let ctrl = Input::new(peripherals.GPIO35, Pull::Up);
+    let edge = Input::new(peripherals.GPIO26, Pull::Up);
+    let ctrl = Input::new(peripherals.GPIO27, Pull::Up);
     rotary_listener::initialize_pcnt_unit(&pcnt.unit0, edge, ctrl);
     rotary_listener::listen(tx, &spawner, pcnt.unit0);
 }
