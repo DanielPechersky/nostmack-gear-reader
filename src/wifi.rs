@@ -1,8 +1,4 @@
-use core::{
-    convert::Infallible,
-    net::{Ipv4Addr, SocketAddrV4},
-    str::FromStr as _,
-};
+use core::{convert::Infallible, net::SocketAddrV4, str::FromStr as _};
 
 use embassy_executor::Spawner;
 use embassy_net::{
@@ -157,7 +153,7 @@ async fn send_deltas(mut rx: Receiver<'static, NoopRawMutex, i16>, stack: Stack<
             tx_buffer,
         );
         socket
-            .bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
+            .bind((stack.config_v4().unwrap().address.address(), 1234))
             .unwrap();
         let remote_addr = SocketAddrV4::from_str(env!("REMOTE_ADDR")).unwrap();
         rx.receive_done(); // drop the first value in case we have a bunch of turns saved up
