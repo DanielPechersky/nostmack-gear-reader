@@ -3,7 +3,7 @@ use core::{convert::Infallible, net::SocketAddrV4, str::FromStr as _};
 use embassy_executor::Spawner;
 use embassy_net::{
     udp::{PacketMetadata, UdpSocket},
-    Runner, Stack, StackResources, StaticConfigV4,
+    Runner, Stack, StackResources,
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, zerocopy_channel::Receiver};
 use embassy_time::{with_timeout, Duration, Timer};
@@ -14,7 +14,7 @@ use esp_hal::{
 };
 use esp_println::println;
 use esp_wifi::{
-    wifi::{ClientConfiguration, WifiController, WifiDevice, WifiStaDevice},
+    wifi::{ClientConfiguration, WifiController, WifiDevice, WifiEvent, WifiStaDevice},
     EspWifiController,
 };
 
@@ -43,35 +43,23 @@ pub async fn connect(
     mut controller: WifiController<'static>,
     rng: Rng,
 ) {
-    println!("MAC: {:?}", device.mac_address());
-    println!("Connecting to wifi");
-
     controller.start_async().await.unwrap();
 
-    debug_networks::<10>(&mut controller).await;
-
-    connect_to_wifi(&mut controller).await;
-
-    println!("Connected to wifi");
+    spawner.spawn(keep_wifi_connected(controller)).unwrap();
 
     let stack = start_network_stack(spawner, device, rng);
-
-    wait_for_link_up(stack).await;
-
-    println!("Waiting to get IP address...");
-    let config = wait_for_ip(stack).await;
-    println!("Got IP: {}", config.address);
 
     spawner.spawn(send_deltas(rx, stack)).unwrap();
 }
 
+#[allow(dead_code)]
 async fn debug_networks<const N: usize>(wifi_controller: &mut WifiController<'static>) {
     let (networks, n) = wifi_controller.scan_n_async::<N>().await.unwrap();
     println!("Found {n} networks");
     println!("Networks: {networks:?}");
 }
 
-async fn connect_to_wifi(wifi_controller: &mut WifiController<'static>) {
+async fn connect_to_wifi(wifi_controller: &mut WifiController<'static>) -> Result<(), ()> {
     let client_config = ClientConfiguration {
         ssid: env!("WIFI_SSID").try_into().unwrap(),
         password: env!("WIFI_PASSWORD").try_into().unwrap(),
@@ -84,8 +72,30 @@ async fn connect_to_wifi(wifi_controller: &mut WifiController<'static>) {
 
     with_timeout(Duration::from_secs(5), wifi_controller.connect_async())
         .await
-        .expect("Wifi connection took too long")
-        .unwrap();
+        .map_err(|e| {
+            println!("Timed out connecting to wifi: {e:?}");
+        })?
+        .map_err(|e| {
+            println!("Failed to connect to wifi: {e:?}");
+        })?;
+
+    Ok(())
+}
+
+#[embassy_executor::task]
+async fn keep_wifi_connected(mut controller: WifiController<'static>) {
+    println!("Connecting to wifi");
+    loop {
+        if matches!(controller.is_connected(), Ok(true)) {
+            controller.wait_for_event(WifiEvent::StaDisconnected).await;
+        } else {
+            #[allow(clippy::collapsible_else_if)]
+            match connect_to_wifi(&mut controller).await {
+                Ok(()) => println!("Connected to wifi"),
+                Err(()) => println!("Retrying connecting to wifi"),
+            }
+        }
+    }
 }
 
 fn start_network_stack(
@@ -108,24 +118,6 @@ fn start_network_stack(
 #[embassy_executor::task]
 async fn net_task(mut runner: Runner<'static, WifiDevice<'static, WifiStaDevice>>) {
     runner.run().await
-}
-
-async fn wait_for_link_up(stack: Stack<'static>) {
-    loop {
-        if stack.is_link_up() {
-            break;
-        }
-        Timer::after(Duration::from_millis(500)).await;
-    }
-}
-
-async fn wait_for_ip(stack: Stack<'static>) -> StaticConfigV4 {
-    loop {
-        if let Some(config) = stack.config_v4() {
-            break config;
-        }
-        Timer::after(Duration::from_millis(500)).await;
-    }
 }
 
 fn generate_random_seed(mut rng: Rng) -> u64 {
@@ -153,7 +145,14 @@ async fn send_deltas(mut rx: Receiver<'static, NoopRawMutex, i16>, stack: Stack<
             tx_buffer,
         );
         socket
-            .bind((stack.config_v4().unwrap().address.address(), 1234))
+            .bind((
+                stack
+                    .config_v4()
+                    .ok_or_else(|| println!("Missing local ip address, can't bind socket"))?
+                    .address
+                    .address(),
+                1234,
+            ))
             .unwrap();
         let remote_addr = SocketAddrV4::from_str(env!("REMOTE_ADDR")).unwrap();
         rx.receive_done(); // drop the first value in case we have a bunch of turns saved up
